@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KRISKA HEALTH, PLLC - Sleep & BH Reporting Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .chart-container { position: relative; height: 40vh; width: 100%; }
+        @media print {
+            .no-print { display: none !important; }
+            body { -webkit-print-color-adjust: exact; color-adjust: exact; }
+            #main-content { margin: 0; padding: 0; }
+        }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-800">
+
+    <div id="main-content" class="container mx-auto p-4 md:p-8">
+        <header class="mb-8 text-center no-print">
+            <h1 class="text-3xl font-bold text-gray-900">Sleep & Behavioral Health Dashboard</h1>
+            <p class="text-md text-gray-600">KRISKA HEALTH, PLLC</p>
+        </header>
+
+        <!-- Step 1: Authentication -->
+        <div id="auth-section" class="bg-white p-6 rounded-lg shadow-md max-w-lg mx-auto text-center">
+            <h2 class="text-xl font-semibold mb-4">Connect to DrChrono</h2>
+            <p class="mb-4 text-gray-600">To view patient data, please provide your API Client ID.</p>
+            <div class="text-left mb-6">
+                <label for="client-id-input" class="block text-sm font-medium text-gray-700">Client ID</label>
+                <input type="text" id="client-id-input" class="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500" placeholder="Paste your Client ID here">
+            </div>
+            <button id="auth-button" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-6 rounded-lg transition duration-300 w-full">
+                Authorize with DrChrono
+            </button>
+        </div>
+
+        <!-- Step 2: Patient Selection & Dashboard View -->
+        <div id="dashboard-section" class="hidden">
+            <div class="bg-white p-6 rounded-lg shadow-md mb-8 no-print">
+                <div class="flex justify-between items-center">
+                    <div>
+                        <label for="patient-select" class="block text-sm font-medium text-gray-700 mb-2">Select a Patient:</label>
+                        <select id="patient-select" class="w-full md:w-96 p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500">
+                            <option>Loading patients...</option>
+                        </select>
+                    </div>
+                    <button id="print-button" class="bg-gray-600 hover:bg-gray-700 text-white font-bold py-2 px-4 rounded-lg transition duration-300">
+                        Print
+                    </button>
+                </div>
+            </div>
+            
+            <div id="loading-spinner" class="hidden text-center">
+                <svg class="animate-spin h-8 w-8 text-blue-600 mx-auto" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                <p class="mt-2 text-gray-600">Fetching clinical data...</p>
+            </div>
+
+            <div id="summary-container" class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8"></div>
+            <div id="charts-container" class="grid grid-cols-1 lg:grid-cols-2 gap-8"></div>
+            <div id="no-data-message" class="hidden text-center py-12 bg-white rounded-lg shadow-md">
+                <h3 class="text-xl font-semibold text-gray-700">No Clinical Data Found</h3>
+                <p class="text-gray-500 mt-2">No scorable clinical data was found for this patient.</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const authButton = document.getElementById('auth-button');
+        const authSection = document.getElementById('auth-section');
+        const dashboardSection = document.getElementById('dashboard-section');
+        const patientSelect = document.getElementById('patient-select');
+        const chartsContainer = document.getElementById('charts-container');
+        const loadingSpinner = document.getElementById('loading-spinner');
+        const noDataMessage = document.getElementById('no-data-message');
+        const clientIdInput = document.getElementById('client-id-input');
+        const printButton = document.getElementById('print-button');
+        const summaryContainer = document.getElementById('summary-container');
+
+        const REDIRECT_URI = 'https://sleepsync.app/';
+        let accessToken = null;
+        let chartInstances = {};
+
+        // --- AUTHENTICATION LOGIC ---
+
+        window.onload = async () => {
+            const urlParams = new URLSearchParams(window.location.search);
+            const authCode = urlParams.get('code');
+            const storedClientId = sessionStorage.getItem('drchrono_client_id');
+
+            if (authCode && storedClientId) {
+                clientIdInput.value = storedClientId;
+                authSection.querySelector('h2').textContent = 'Authenticating...';
+                
+                try {
+                    await getAccessToken(authCode, storedClientId);
+                    sessionStorage.removeItem('drchrono_client_id');
+                    await initializeDashboard();
+                } catch (error) {
+                    handleAuthError(error);
+                }
+            }
+        };
+
+        authButton.addEventListener('click', () => {
+            const clientId = clientIdInput.value;
+            if (!clientId) {
+                alert('Please enter your Client ID.');
+                return;
+            }
+            sessionStorage.setItem('drchrono_client_id', clientId);
+            const scopes = 'patients:read clinical:read';
+            const authUrl = `https://drchrono.com/o/authorize/?scope=${encodeURIComponent(scopes)}&response_type=code&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&client_id=${clientId}`;
+            window.location.href = authUrl;
+        });
+
+        async function getAccessToken(code, clientId) {
+            // This function now calls our secure serverless function
+            const response = await fetch('/.netlify/functions/get-token', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    code: code,
+                    clientId: clientId,
+                    redirectUri: REDIRECT_URI
+                }),
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.error || `Token request failed: ${response.statusText}`);
+            }
+            const data = await response.json();
+            accessToken = data.access_token;
+        }
+
+        // --- DASHBOARD INITIALIZATION & UI ---
+
+        async function initializeDashboard() {
+            showDashboardState();
+            await fetchAndPopulatePatients();
+            patientSelect.addEventListener('change', onPatientChange);
+            printButton.addEventListener('click', () => window.print());
+            if (patientSelect.options.length > 1) {
+                patientSelect.value = patientSelect.options[1].value;
+                patientSelect.dispatchEvent(new Event('change'));
+            }
+        }
+
+        async function fetchAndPopulatePatients() {
+            patientSelect.innerHTML = '<option>Loading patients...</option>';
+            try {
+                const patients = await apiFetch('https://drchrono.com/api/patients');
+                patientSelect.innerHTML = '<option value="">Select a patient</option>';
+                patients.results.sort((a,b) => a.last_name.localeCompare(b.last_name)).forEach(patient => {
+                    const option = document.createElement('option');
+                    option.value = patient.id;
+                    option.textContent = `${patient.last_name}, ${patient.first_name} (DOB: ${patient.date_of_birth})`;
+                    patientSelect.appendChild(option);
+                });
+            } catch (error) {
+                console.error('Failed to fetch patients:', error);
+                patientSelect.innerHTML = '<option>Error loading patients</option>';
+            }
+        }
+        
+        async function onPatientChange() {
+            const patientId = patientSelect.value;
+            destroyCharts();
+            chartsContainer.innerHTML = '';
+            summaryContainer.innerHTML = '';
+            
+            if (!patientId) {
+                noDataMessage.classList.add('hidden');
+                return;
+            }
+
+            loadingSpinner.classList.remove('hidden');
+            noDataMessage.classList.add('hidden');
+
+            try {
+                const clinicalData = await getClinicalDataForPatient(patientId);
+                
+                if (Object.keys(clinicalData).length === 0) {
+                    noDataMessage.classList.remove('hidden');
+                } else {
+                    noDataMessage.classList.add('hidden');
+                    updateSummaryCards(clinicalData);
+                    createCharts(clinicalData);
+                }
+            } catch (error) {
+                console.error('Error fetching clinical data:', error);
+                alert('Could not fetch data for the selected patient.');
+            } finally {
+                loadingSpinner.classList.add('hidden');
+            }
+        }
+
+        function updateSummaryCards(data) {
+            const metricsToShow = ['AHI', 'ESS', 'CPAP Adherence (%)', 'PHQ-9', 'GAD-7', 'ISI'];
+            metricsToShow.forEach(metric => {
+                if (data[metric] && data[metric].length > 0) {
+                    const latestEntry = data[metric][data[metric].length - 1];
+                    const card = document.createElement('div');
+                    card.className = 'bg-white p-4 rounded-lg shadow-md text-center';
+                    card.innerHTML = `
+                        <h4 class="text-sm font-medium text-gray-500">${metric}</h4>
+                        <p class="text-2xl font-bold text-gray-900">${latestEntry.y}</p>
+                        <p class="text-xs text-gray-400">${latestEntry.x.toLocaleDateString()}</p>
+                    `;
+                    summaryContainer.appendChild(card);
+                }
+            });
+        }
+
+        // --- DATA FETCHING & PARSING ---
+
+        async function getClinicalDataForPatient(patientId) {
+            const clinicalNotes = await apiFetch(`https://drchrono.com/api/clinical_notes?patient=${patientId}`);
+            const results = { 'AHI': [], 'ESS': [], 'CPAP Adherence (%)': [], 'PHQ-9': [], 'GAD-7': [], 'ISI': [], 'PSQI': [] };
+
+            for (const note of clinicalNotes.results) {
+                if (note.custom_note && note.custom_note.fields) {
+                    note.custom_note.fields.forEach(field => {
+                        const fieldName = (field.name || field.title || '').toUpperCase();
+                        const value = parseFloat(field.value);
+                        if (!isNaN(value)) {
+                            const date = new Date(note.date_of_service);
+                            if (fieldName.includes('AHI')) results['AHI'].push({ x: date, y: value });
+                            else if (fieldName.includes('EPWORTH') || (fieldName.includes('ESS') && fieldName.includes('SCORE'))) results['ESS'].push({ x: date, y: value });
+                            else if (fieldName.includes('CPAP') && fieldName.includes('ADHERENCE')) results['CPAP Adherence (%)'].push({ x: date, y: value });
+                            else if (fieldName.includes('PHQ-9') && fieldName.includes('SCORE')) results['PHQ-9'].push({ x: date, y: value });
+                            else if (fieldName.includes('GAD-7') && fieldName.includes('SCORE')) results['GAD-7'].push({ x: date, y: value });
+                            else if (fieldName.includes('INSOMNIA SEVERITY') || (fieldName.includes('ISI') && fieldName.includes('SCORE'))) results['ISI'].push({ x: date, y: value });
+                            else if (fieldName.includes('PITTSBURGH SLEEP') || (fieldName.includes('PSQI') && fieldName.includes('SCORE'))) results['PSQI'].push({ x: date, y: value });
+                        }
+                    });
+                }
+            }
+            
+            const finalResults = {};
+            for (const key in results) {
+                if (results[key].length > 0) {
+                    finalResults[key] = results[key].sort((a, b) => a.x - b.x);
+                }
+            }
+            return finalResults;
+        }
+
+        // --- CHARTING LOGIC ---
+
+        function createCharts(data) {
+            const chartConfig = {
+                'AHI': { color: 'rgba(255, 99, 132, 1)', yAxisTitle: 'Events per Hour' },
+                'ESS': { color: 'rgba(255, 159, 64, 1)', yAxisTitle: 'Score' },
+                'CPAP Adherence (%)': { color: 'rgba(75, 192, 192, 1)', yAxisTitle: 'Adherence %' },
+                'PHQ-9': { color: 'rgba(54, 162, 235, 1)', yAxisTitle: 'Score' },
+                'GAD-7': { color: 'rgba(153, 102, 255, 1)', yAxisTitle: 'Score' },
+                'ISI': { color: 'rgba(255, 206, 86, 1)', yAxisTitle: 'Score' },
+                'PSQI': { color: 'rgba(201, 203, 207, 1)', yAxisTitle: 'Score' },
+            };
+            
+            for (const dataName in data) {
+                const config = chartConfig[dataName];
+                const chartData = data[dataName];
+                
+                const container = document.createElement('div');
+                container.className = 'bg-white p-6 rounded-lg shadow-md';
+                const canvas = document.createElement('canvas');
+                container.appendChild(canvas);
+                chartsContainer.appendChild(container);
+
+                const ctx = canvas.getContext('2d');
+                chartInstances[dataName] = new Chart(ctx, {
+                    type: 'line',
+                    data: { datasets: [{
+                        label: `${dataName}`, data: chartData, borderColor: config.color,
+                        backgroundColor: config.color.replace('1)', '0.2)'),
+                        borderWidth: 2, tension: 0.1, fill: true,
+                    }]},
+                    options: {
+                        responsive: true, maintainAspectRatio: false,
+                        scales: {
+                            x: { type: 'time', time: { unit: 'day', tooltipFormat: 'MMM d, yyyy' }, title: { display: true, text: 'Date of Service' }},
+                            y: { beginAtZero: true, title: { display: true, text: config.yAxisTitle }}
+                        },
+                        plugins: { title: { display: true, text: `${dataName} Progress`, font: { size: 18 }}}
+                    }
+                });
+            }
+        }
+        
+        function destroyCharts() {
+            Object.values(chartInstances).forEach(chart => chart.destroy());
+            chartInstances = {};
+        }
+
+        // --- UTILITY & HELPER FUNCTIONS ---
+
+        async function apiFetch(url) {
+            const response = await fetch(url, {
+                headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+            });
+            if (!response.ok) throw new Error(`API request failed: ${response.statusText}`);
+            return await response.json();
+        }
+        
+        function handleAuthError(error) {
+            console.error('Authentication Error:', error);
+            alert('Failed to authenticate with DrChrono. Please check your credentials and try again.');
+            window.history.replaceState({}, document.title, window.location.pathname);
+            showAuthState();
+        }
+
+        function showAuthState() {
+            dashboardSection.classList.add('hidden');
+            authSection.classList.remove('hidden');
+        }
+
+        function showDashboardState() {
+            authSection.classList.add('hidden');
+            dashboardSection.classList.remove('hidden');
+        }
+    </script>
+</body>
+</html>
