@@ -122,6 +122,7 @@
         });
 
         async function getAccessToken(code, clientId) {
+            console.log('Attempting to get access token...');
             const response = await fetch('/.netlify/functions/get-token', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -134,10 +135,12 @@
 
             if (!response.ok) {
                 const errorData = await response.json();
+                console.error('Failed to get token from backend:', errorData);
                 throw new Error(errorData.error || `Token request failed: ${response.statusText}`);
             }
             const data = await response.json();
             accessToken = data.access_token;
+            console.log('Access Token has been set:', accessToken ? 'Yes, token received' : 'No, token is missing!');
         }
 
         // --- DASHBOARD INITIALIZATION & UI ---
@@ -304,6 +307,7 @@
         // --- UTILITY & HELPER FUNCTIONS ---
 
         async function apiFetch(url) {
+            console.log('Making API call with token:', accessToken);
             const response = await fetch(url, {
                 headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
             });
