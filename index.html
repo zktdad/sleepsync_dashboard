@@ -156,7 +156,6 @@
         async function fetchAndPopulatePatients() {
             patientSelect.innerHTML = '<option>Loading patients...</option>';
             try {
-                // FIX: Added 'since' parameter to satisfy DrChrono API requirement
                 const patients = await apiFetch('/api/patients?since=2020-01-01');
                 patientSelect.innerHTML = '<option value="">Select a patient</option>';
                 patients.results.sort((a,b) => a.last_name.localeCompare(b.last_name)).forEach(patient => {
@@ -223,7 +222,8 @@
         // --- DATA FETCHING & PARSING ---
 
         async function getClinicalDataForPatient(patientId) {
-            const clinicalNotes = await apiFetch(`/api/clinical_notes?patient=${patientId}`);
+            // FIX: Added 'since' parameter to satisfy DrChrono API requirement
+            const clinicalNotes = await apiFetch(`/api/clinical_notes?patient=${patientId}&since=2020-01-01`);
             const results = { 'AHI': [], 'ESS': [], 'CPAP Adherence (%)': [], 'PHQ-9': [], 'GAD-7': [], 'ISI': [], 'PSQI': [] };
 
             for (const note of clinicalNotes.results) {
