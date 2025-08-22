@@ -122,7 +122,6 @@
         });
 
         async function getAccessToken(code, clientId) {
-            // This function now calls our secure serverless function
             const response = await fetch('/.netlify/functions/get-token', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
